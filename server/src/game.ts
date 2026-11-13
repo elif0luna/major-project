@@ -1,15 +1,37 @@
 import {
   ARENA_H, ARENA_W,
-  FIRE_COOLDOWN_TICKS, HISTORY_TICKS, INPUT_FIRE, MAX_REWIND_MS, PLAYER_MAX_HEALTH,
-  PLAYER_MAX_STAMINA, PLAYER_RADIUS, RESPAWN_TICKS, SHOT_DAMAGE, SHOT_RADIUS, TICK_DT,
-  firstWallDistance, makeShotRay, rayCircleDistance, samplePositions, stepPlayer,
-  type ClientInput, type GameEvent, type PlayerState, type Pos, type ServerSnapshot, type TimelineEntry,
+  FIRE_COOLDOWN_TICKS, INPUT_FIRE, MAX_VIEW_DELAY_MS, PLAYER_MAX_HEALTH,
+  PLAYER_MAX_STAMINA, RESPAWN_TICKS, SHOT_DAMAGE, SHOT_RADIUS, TICK_DT,
+  firstWallDistance, makeShotRay, rayCircleDistance, stepPlayer,
+  type ClientInput, type GameEvent, type PlayerState, type Pos, type ServerSnapshot,
 } from "@netcode/shared";
+import { StateHistory } from "./lagcomp";
 import { serverNow } from "./time";
+
+// Phase 8: everything the experiment needs to know about one shot attempt.
+export interface ShotRecord {
+  tick: number;
+  attackerId: number;
+  targetId: number | null;       // the opponent (also on a miss); null if nobody else is connected
+  inputSeq: number;
+  clientTime: number;
+  estimatedServerTime: number;   // clientTime + client-reported offset (server time when the key was pressed)
+  rewindTime: number;            // server time the shot was judged at (== tick time when uncompensated)
+  targetX: number;               // target position used for the verdict
+  targetY: number;
+  accepted: boolean;
+  hitNow: boolean;               // would it have hit against CURRENT positions?
+  blockedByWall: boolean;
+  rewindMs: number;
+  compensated: boolean;
+  rejectionReason: "none" | "outside_hit_radius" | "blocked_by_wall" | "invalid_old_timestamp";
+}
 
 export interface GameOptions {
   lagComp: boolean;        // Phase 5 compensation ON/OFF (the experiment variable)
+  damage?: boolean;        // false in experiments: shots are judged and logged but deal no damage (default true)
   now?: () => number;      // injectable clock so tests are deterministic
+  onShot?: (rec: ShotRecord) => void; // Phase 8 instrumentation hook (must only push to memory)
 }
 
 interface ClockInfo {
@@ -29,18 +51,22 @@ export class Game {
   readonly lagComp: boolean;
   tick = 0;
 
+  private damageEnabled: boolean;
+  private onShot: ((rec: ShotRecord) => void) | undefined;
   private now: () => number;
   private tickTime: number;
   private players = new Map<number, PlayerState>();
   private inputQueues = new Map<number, ClientInput[]>();
   private clocks = new Map<number, ClockInfo>();
   private lastFireTick = new Map<number, number>();
-  private history: TimelineEntry[] = []; // Phase 5 ring buffer: one entry per tick
+  private history = new StateHistory(); // Phase 5: ~1 s of past positions
   private events: GameEvent[] = [];
   private nextId = 1;
 
   constructor(opts: GameOptions) {
     this.lagComp = opts.lagComp;
+    this.damageEnabled = opts.damage ?? true;
+    this.onShot = opts.onShot;
     this.now = opts.now ?? serverNow;
     this.tickTime = this.now();
   }
@@ -106,7 +132,7 @@ export class Game {
       aimX: num(raw.aimX),
       aimY: num(raw.aimY),
       inputBits: num(raw.inputBits) | 0,
-      viewDelay: Math.min(MAX_REWIND_MS, Math.max(0, num(raw.viewDelay))),
+      viewDelay: Math.min(MAX_VIEW_DELAY_MS, Math.max(0, num(raw.viewDelay))),
     };
     if (q.length < 120) q.push(input); // cap so a flood can't grow memory
   }
@@ -161,11 +187,7 @@ export class Game {
   }
 
   private recordHistory() {
-    this.history.push({
-      time: this.tickTime,
-      players: [...this.players.values()].map(({ id, x, y }) => ({ id, x, y })),
-    });
-    if (this.history.length > HISTORY_TICKS) this.history.shift();
+    this.history.record(this.tickTime, this.players.values());
   }
 
   // ---- Phase 5+: lag-compensated hitscan shot ----
@@ -178,27 +200,30 @@ export class Game {
     const nowTarget = this.findShotTarget(attacker, (o) => o);
 
     // What the attacker was actually looking at when they pressed the key.
+    // If the implied time is older than the stored history, compensation is refused
+    // and the shot is judged against the current state, like compensation OFF.
     let rewindMs = 0;
     let rewound: Map<number, Pos> | null = null;
+    let seenAt = this.tickTime;
     const offset = this.clocks.get(attacker.id)?.offset;
-    if (this.lagComp && offset != null && this.history.length > 0) {
-      const serverTimeAtInput = input.clientTime + offset;
-      const target = Math.min(
-        this.tickTime,
-        Math.max(this.tickTime - MAX_REWIND_MS, serverTimeAtInput - input.viewDelay),
-      );
-      rewindMs = this.tickTime - target;
-      rewound = samplePositions(this.history, target);
+    if (this.lagComp && offset != null) {
+      const wanted = input.clientTime + offset - input.viewDelay;
+      const r = this.history.rewind(wanted, this.tickTime);
+      if (r.ok) {
+        rewindMs = r.rewindMs;
+        rewound = r.positions;
+        seenAt = wanted;
+      }
     }
 
-    const shotTarget = rewound ? this.findShotTarget(attacker, (o) => rewound!.get(o.id) ?? o) : nowTarget;
+    const shotTarget = rewound ? this.findShotTarget(attacker, (o) => rewound!.get(o.id) ?? null) : nowTarget;
     const hit = shotTarget.targetId !== null;
     const targetId = shotTarget.targetId;
     let killed = false;
 
     if (hit && targetId !== null) {
       const target = this.players.get(targetId);
-      if (target && target.alive) {
+      if (target && target.alive && this.damageEnabled) {
         const health = Math.max(0, target.health - SHOT_DAMAGE);
         killed = health <= 0;
         this.players.set(targetId, {
@@ -216,13 +241,42 @@ export class Game {
       }
     }
 
+    if (this.onShot) {
+      let opponentId: number | null = null;
+      for (const id of this.players.keys()) if (id !== attacker.id) opponentId = id;
+      const opponent = opponentId === null ? undefined : this.players.get(opponentId);
+      const used = opponentId === null ? undefined : (rewound?.get(opponentId) ?? (opponent ? { x: opponent.x, y: opponent.y } : undefined));
+      const wallBlocked = shotTarget.blockedByWall;
+      this.onShot({
+        tick: this.tick,
+        attackerId: attacker.id,
+        targetId: opponentId,
+        inputSeq: input.seq,
+        clientTime: input.clientTime,
+        estimatedServerTime: offset != null ? input.clientTime + offset : this.tickTime,
+        rewindTime: seenAt,
+        targetX: used?.x ?? NaN,
+        targetY: used?.y ?? NaN,
+        accepted: hit,
+        hitNow: nowTarget.targetId !== null,
+        blockedByWall: wallBlocked,
+        rewindMs,
+        compensated: rewound !== null,
+        rejectionReason: hit ? "none"
+          : wallBlocked ? "blocked_by_wall"
+          : this.lagComp && rewound === null ? "invalid_old_timestamp"
+          : "outside_hit_radius",
+      });
+    }
+
     this.events.push({
       kind: "shot",
       attacker: attacker.id,
+      seq: input.seq,
       target: targetId,
       hit,
       hitNow: nowTarget.targetId !== null,
-      damage: hit ? SHOT_DAMAGE : 0,
+      damage: hit && this.damageEnabled ? SHOT_DAMAGE : 0,
       killed,
       blockedByWall: shotTarget.blockedByWall,
       fromX: attacker.x,
@@ -235,7 +289,8 @@ export class Game {
     });
   }
 
-  private findShotTarget(attacker: PlayerState, posOf: (p: PlayerState) => Pos) {
+  // posOf returns null for a player who should not be hit-tested (e.g. dead at the rewound time).
+  private findShotTarget(attacker: PlayerState, posOf: (p: PlayerState) => Pos | null) {
     const ray = makeShotRay(attacker.x, attacker.y, attacker.aimX, attacker.aimY);
     const wallDist = firstWallDistance(ray);
     const maxDist = wallDist ?? ray.range;
@@ -246,6 +301,7 @@ export class Game {
       if (other.id === attacker.id) continue;
       if (!other.alive) continue;
       const pos = posOf(other);
+      if (!pos) continue;
       const d = rayCircleDistance(ray, { id: other.id, x: pos.x, y: pos.y, radius: SHOT_RADIUS });
       if (d !== null && d <= bestDist) {
         bestDist = d;

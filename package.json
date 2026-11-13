@@ -3,12 +3,22 @@
   "private": true,
   "packageManager": "pnpm@10.17.1",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter server --filter client dev",
+    "dev": "pnpm -r --parallel --filter server --filter proxy --filter client dev",
     "dev:server": "pnpm --filter server dev",
+    "dev:proxy": "pnpm --filter proxy dev",
     "dev:client": "pnpm --filter client dev",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter server test",
-    "smoke": "tsx scripts/smoke-test.ts"
+    "test": "pnpm -r --filter server --filter proxy test",
+    "smoke": "tsx scripts/smoke-test.ts",
+    "proxy:check": "tsx scripts/proxy-check.ts",
+    "netctl": "tsx scripts/netctl.ts",
+    "typecheck:scripts": "tsc -p scripts/tsconfig.json",
+    "exp": "tsx scripts/experiment/sweep.ts",
+    "exp:quick": "tsx scripts/experiment/sweep.ts --preset quick",
+    "exp:sweep": "tsx scripts/experiment/sweep.ts --preset standard",
+    "exp:full": "tsx scripts/experiment/sweep.ts --preset full",
+    "exp:analyze": "python analysis/analyze.py",
+    "exp:reset": "tsx scripts/experiment/reset-db.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.13",

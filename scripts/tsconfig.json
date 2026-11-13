@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"], "typeRoots": ["../server/node_modules/@types"], "noEmit": true, "lib": ["ES2023", "DOM"] },
+  "include": ["experiment/**/*.ts"]
+}

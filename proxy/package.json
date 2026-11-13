@@ -1,0 +1,22 @@
+{
+  "name": "proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 7 application-level network degradation proxy",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}

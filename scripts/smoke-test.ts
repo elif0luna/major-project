@@ -7,7 +7,7 @@ import {
   type ClientMessage, type GameEvent, type PlayerSnap, type ServerMessage, type ServerSnapshot,
 } from "../shared/src/index";
 
-declare const process: { env: Record<string, string | undefined>; exitCode?: number };
+declare const process: { env: Record<string, string | undefined>; exitCode?: number; exit(code: number): never };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const port = Number(process.env.PORT ?? SERVER_PORT);
@@ -16,6 +16,13 @@ function check(name: string, ok: boolean, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name} ${detail}`);
   if (!ok) failures++;
 }
+
+// Without this, an unreachable server leaves the open() promise pending, the event
+// loop drains, and the script exits 0 having printed nothing.
+setTimeout(() => {
+  console.error(`FAIL  timed out (is the server running on ws://localhost:${port}?)`);
+  process.exit(1);
+}, 30_000);
 
 class Bot {
   ws = new WebSocket(`ws://localhost:${port}`);
@@ -46,7 +53,11 @@ class Bot {
     });
   }
   open() {
-    return new Promise<void>((res) => this.ws.addEventListener("open", () => res()));
+    return new Promise<void>((res, rej) => {
+      this.ws.addEventListener("open", () => res());
+      this.ws.addEventListener("error", () => rej(new Error(`cannot connect to ws://localhost:${port}`)));
+      this.ws.addEventListener("close", (e) => rej(new Error(`connection closed: ${e.reason || e.code}`)));
+    });
   }
   send(m: ClientMessage) {
     this.ws.send(encode(m));
@@ -114,10 +125,10 @@ async function main() {
 
   a.ws.close(); b.ws.close();
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");
-  process.exitCode = failures ? 1 : 0;
+  process.exit(failures ? 1 : 0);
 }
 
 main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
+  console.error(`FAIL  ${err instanceof Error ? err.message : err}`);
+  process.exit(1);
 });

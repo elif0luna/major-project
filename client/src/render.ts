@@ -32,6 +32,7 @@ interface RenderState {
   interpolation: boolean;
   rtt: number | null;
   correction: number;
+  route: string;
 }
 
 interface PlayerView {
@@ -303,6 +304,7 @@ function syncHud(state: RenderState) {
       </div>
     </div>
     <div class="hud-panel hud-net">
+      <div><span>Route</span><strong>${state.route}</strong></div>
       <div><span>RTT</span><strong>${state.rtt === null ? "--" : `${state.rtt.toFixed(0)} ms`}</strong></div>
       <div><span>Correction</span><strong>${state.correction.toFixed(1)} px</strong></div>
       <div><span>Prediction</span><strong class="${state.prediction ? "on" : "off"}">${state.prediction ? "ON" : "OFF"}</strong></div>
