@@ -1,9 +1,13 @@
 // Phase 0: the protocol spec. Single source of truth for client + server.
 //
 // Clock convention: serverTime ~= clientTime + offset
-// clientTime = performance.timeOrigin + performance.now() in the browser
-// serverTime = serverNow() on the server (epoch ms, sub-ms precision)
+//   clientTime = performance.timeOrigin + performance.now() in the browser
 //   serverTime = serverNow() on the server (epoch ms, sub-ms precision)
+//
+// The pong carries a single serverTime: the server replies synchronously inside the
+// message handler, so its receive (t1) and send (t2) times are the same instant and
+//   offset = ((t1 - t0) + (t2 - t3)) / 2  reduces to  serverTime - (t0 + t3) / 2
+//   RTT    = (t3 - t0) - (t2 - t1)        reduces to  t3 - t0
 
 export interface ClientInput {
   t: "input";
@@ -64,6 +68,7 @@ export type GameEvent =
   | {
       kind: "shot";           // every shot ATTEMPT, hit or miss (Phase 8 logs these)
       attacker: number;
+      seq: number;            // input seq that fired the shot (lets the harness join bot-side and server-side logs)
       target: number | null;  // who was hit (null = miss)
       hit: boolean;           // the server's verdict
       hitNow: boolean;        // would it have hit against CURRENT positions?

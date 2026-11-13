@@ -1,3 +1,7 @@
 node_modules
-dist
+dist 
 .vscode
+docs
+.kiro
+graphify-out
+data

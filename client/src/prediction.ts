@@ -9,6 +9,13 @@ export class Predictor {
   onCorrection: ((magnitudePx: number, ackedSeq: number) => void) | null = null; // Phase 8 hooks here
   private pending: ClientInput[] = []; // sent but not yet acknowledged
 
+  // Drop all local state (used when prediction is switched off).
+  reset() {
+    this.state = null;
+    this.pending = [];
+    this.lastCorrection = 0;
+  }
+
   // Apply immediately, remember until the server acknowledges it.
   applyLocal(input: ClientInput) {
     if (!this.state) return; // wait for the first authoritative snapshot

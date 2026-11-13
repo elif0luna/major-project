@@ -1,7 +1,7 @@
 import "./style.css";
 
 import {
-  INTERP_DELAY_MS,
+  INTERPOLATION_DELAY_MS,
   TICK_MS,
   type ClientInput,
   type ServerSnapshot,
@@ -160,8 +160,6 @@ app.innerHTML = `
 
   </div>
 
-  </div>
-
   <div id="pause-overlay" class="screen hidden">
 
     <div class="menu-panel pause-panel">
@@ -293,8 +291,6 @@ app.innerHTML = `
     </div>
 
   </div>
-
-  <pre id="hud" class="hidden"></pre>
 `;
 
 // --------------------------------------------------
@@ -428,7 +424,7 @@ window.addEventListener("keydown", (e) => {
     config.prediction = !config.prediction;
 
     if (!config.prediction) {
-      predictor.state = null;
+      predictor.reset();
     }
   }
 
@@ -444,7 +440,7 @@ window.addEventListener("keydown", (e) => {
 function viewDelayMs(): number {
   return (
     (clock.rtt ?? 0) / 2 +
-    (config.interpolation ? INTERP_DELAY_MS : 0)
+    (config.interpolation ? INTERPOLATION_DELAY_MS : 0)
   );
 }
 
@@ -571,6 +567,11 @@ const net = new Net({
       onSnapshot(m);
     }
   },
+
+  onClose: (reason) => {
+    startStatus.textContent = `Disconnected: ${reason}`;
+    console.warn("disconnected:", reason);
+  },
 });
 
 // --------------------------------------------------
@@ -641,6 +642,7 @@ function frame() {
     interpolation: config.interpolation,
     rtt: clock.rtt,
     correction: predictor.lastCorrection,
+    route: net.route,
   });
 
   requestAnimationFrame(frame);
